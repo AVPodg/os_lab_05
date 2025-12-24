@@ -5,8 +5,12 @@
 #include <errno.h>
 #include <limits.h>
 #include <sys/types.h>
+#include "child.h"  // ПОДКЛЮЧАЕМ В САМОМ НАЧАЛЕ!
 
 #define BUFFER_SIZE 1024
+
+// Сначала объявляем вспомогательные функции, которые используют child_handle_error
+static void notify_parent(void);
 
 // Статические вспомогательные функции
 static void write_string(int fd, const char *str) {
@@ -52,13 +56,14 @@ static char *safe_strdup(const char *str) {
     return copy;
 }
 
+// Теперь реализация notify_parent
 static void notify_parent(void) {
     if (kill(getppid(), SIGUSR1) == -1) {
         child_handle_error("Ошибка отправки сигнала родителю");
     }
 }
 
-// Функция для обработки ошибок
+// Функция для обработки ошибок - реализация
 void child_handle_error(const char *msg) {
     write_string(STDERR_FILENO, "Ошибка: ");
     write_string(STDERR_FILENO, msg);

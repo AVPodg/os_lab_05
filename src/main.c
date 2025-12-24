@@ -9,7 +9,7 @@
 
 #define BUFFER_SIZE 1024
 
-volatile sig_atomic_t child_failed = 0;
+volatile sig_atomic_t child_failed = 0; // Значения: 0 - ошибок нет, 1 - дочерний процесс сообщил об ошибке
 
 // Статические вспомогательные функции
 static void write_string(int fd, const char *str) {
@@ -65,7 +65,9 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    if (signal(SIGUSR1, handle_child_signal) == SIG_ERR) {
+    if (signal(SIGUSR1, handle_child_signal) == SIG_ERR) { 
+        // SIG_ERR - константа, означающая что установка не удалась
+        // signal() - функция установки обработчика
         main_handle_error("Ошибка установки обработчика сигнала");
     }
 
@@ -75,7 +77,7 @@ int main(int argc, char *argv[]) {
     }
 
     int pipefd[2];
-    if (pipe(pipefd) == -1) {
+    if (pipe(pipefd) == -1) {  // pipe() создает однонаправленный канал связи
         close(file_fd);
         main_handle_error("Ошибка создания pipe");
     }
@@ -92,6 +94,9 @@ int main(int argc, char *argv[]) {
         close(pipefd[1]);
         
         if (dup2(pipefd[0], STDIN_FILENO) == -1) {
+            // Здесь: делаем так чтобы STDIN_FILENO (0) указывал на pipefd[0]
+            // Теперь когда дочерний процесс читает из stdin (0), 
+            // он фактически читает из pipe
             close(pipefd[0]);
             child_handle_error("Ошибка перенаправления stdin");
         }
@@ -100,6 +105,7 @@ int main(int argc, char *argv[]) {
         run_child_process();
         exit(EXIT_SUCCESS);
     } else {
+        // pid содержит ID дочернего процесса (положительное число)
         close(pipefd[0]);
         
         write_string(STDOUT_FILENO, "Родительский процесс PID: ");
@@ -110,27 +116,46 @@ int main(int argc, char *argv[]) {
         write_string(STDOUT_FILENO, argv[1]);
         write_string(STDOUT_FILENO, "\n\n");
 
-        char buffer[BUFFER_SIZE];
-        int line_number = 0;
-        ssize_t bytes_read;
+        char buffer[BUFFER_SIZE];  
         
+        int line_number = 0; 
+        ssize_t bytes_read; 
+        
+        // Цикл чтения файла порциями:
         while ((bytes_read = read(file_fd, buffer, sizeof(buffer) - 1)) > 0) {
-            buffer[bytes_read] = '\0';
-            char *line = buffer;
-            char *newline;
+            // - file_fd - дескриптор открытого файла
+            // - buffer - указатель на буфер для данных
+            // - sizeof(buffer) - 1 = 1023 байт (оставляем место для '\0')
             
+            // bytes_read - количество фактически прочитанных байт:
+            // > 0 - успешно прочитано N байт
+            // = 0 - достигнут конец файла (EOF)
+            // = -1 - ошибка чтения
+            
+            buffer[bytes_read] = '\0';  
+            // Добавляем нулевой байт в конец данных
+            
+            char *line = buffer;    // Указатель на текущую обрабатываемую строку
+            char *newline;          // Указатель на символ новой строки
+            
+            // Разбиваем буфер на отдельные строки по символу '\n'
             while ((newline = strchr(line, '\n')) != NULL) {
-                *newline = '\0';
+                // strchr(line, '\n') ищет первое вхождение '\n' в строке
+                // Возвращает указатель на найденный '\n' или NULL если не найден
+                
+                *newline = '\0';  
+                // Заменяем символ '\n' на '\0' (нулевой байт)
+                
                 line_number++;
                 
                 if (strlen(line) == 0) {
-                    line = newline + 1;
-                    continue;
+                    line = newline + 1; 
+                    continue;  
                 }
                 
                 if (child_failed) {
                     write_string(STDOUT_FILENO, "Родитель: Остановка из-за ошибки\n");
-                    break;
+                    break; 
                 }
                 
                 write_string(STDOUT_FILENO, "Родитель: Отправка команды ");
@@ -139,30 +164,43 @@ int main(int argc, char *argv[]) {
                 write_string(STDOUT_FILENO, line);
                 write_string(STDOUT_FILENO, "\n");
                 
-                write(pipefd[1], line, strlen(line));
-                write(pipefd[1], "\n", 1);
+                write(pipefd[1], line, strlen(line));  
                 
-                sleep(1);
-                line = newline + 1;
+                write(pipefd[1], "\n", 1);  
+                
+                sleep(1);  
+                
+                line = newline + 1;  
+                // Перемещаем указатель на следующую строку в буфере
             }
             
-            if (child_failed) break;
+            if (child_failed) break;  
         }
-
-        close(pipefd[1]);
-        close(file_fd);
-
-        int status;
-        waitpid(pid, &status, 0);
-
-        if (WIFEXITED(status)) {
+        
+        close(pipefd[1]);  
+        // Закрываем конец pipe для записи
+        // Дочерний процесс получит EOF (end-of-file) при чтении из stdin
+        
+        close(file_fd);  
+            int status;  
+        
+        waitpid(pid, &status, 0);  
+        // waitpid() - ожидание завершения конкретного дочернего процесса
+        // Параметры:
+        //   pid - ID ожидаемого процесса
+        //   &status - указатель куда записать статус
+        //   0 - флаги ожидания (0 = обычное блокирующее ожидание)
+        
+        // waitpid() БЛОКИРУЕТ выполнение родителя пока дочерний процесс не завершится
+        
+        if (WIFEXITED(status)) {              
             write_string(STDOUT_FILENO, "Родитель: Дочерний процесс завершен с кодом: ");
-            write_int(STDOUT_FILENO, WEXITSTATUS(status));
+            write_int(STDOUT_FILENO, WEXITSTATUS(status));  
             write_string(STDOUT_FILENO, "\n");
         }
-
+        
         write_string(STDOUT_FILENO, "Родитель: Завершение работы\n");
     }
 
-    return 0;
+    return 0;  
 }
